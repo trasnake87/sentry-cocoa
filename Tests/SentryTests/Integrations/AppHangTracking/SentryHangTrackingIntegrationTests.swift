@@ -7,6 +7,9 @@
 #endif
 import _SentryPrivate
 import XCTest
+#if os(iOS) || os(tvOS)
+import UIKit
+#endif
 
 @available(*, deprecated, message: "Testing deprecated App Hang tracking")
 class SentryHangTrackingIntegrationTests: SentrySDKIntegrationTestsBase {
@@ -350,6 +353,34 @@ class SentryHangTrackingIntegrationTests: SentrySDKIntegrationTestsBase {
         Dynamic(sut).anrDetectedWithType(SentryANRType.unknown)
 
         assertNoEventCaptured()
+    }
+#endif // os(iOS) || os(tvOS)
+
+#if os(iOS) || os(tvOS)
+    /// Expensify/App#106340 (T1): SentryHangTrackingIntegration.swift L92-94 gate, executed through the
+    /// integration's own `anrDetected`, reading the stored V2 app-hang event back from the file manager.
+    func testIssue106340_E_anrDetected_storesAppHangEventOnlyWhenApplicationStateIsActive() throws {
+        setUpThreadInspector()
+        givenInitializedTracker()
+        let fileManager = try XCTUnwrap(SentrySDKInternal.currentHub().client()?.fileManager)
+        let cases: [(state: UIApplication.State, name: String, expectStored: Bool)] = [
+            (.active, "active", true), (.inactive, "inactive", false), (.background, "background", false)
+        ]
+        for testCase in cases {
+            fileManager.deleteAppHangEvent()
+            let application = TestSentryUIApplication()
+            application.unsafeApplicationState = testCase.state
+            SentryDependencyContainer.sharedInstance().threadsafeApplication = SentryThreadsafeApplication(applicationProvider: { application }, notificationCenter: TestNSNotificationCenterWrapper(), dispatchQueueWrapper: TestSentryDispatchQueueWrapper())
+            XCTAssertEqual(SentryDependencyContainer.sharedInstance().threadsafeApplication.applicationState, testCase.state)
+
+            Dynamic(sut).anrDetectedWithType(SentryANRType.fullyBlocking)
+
+            let stored = fileManager.readAppHangEvent()
+            let detail = stored.map { " value=\($0.exceptions?.first?.value ?? "nil") type=\($0.exceptions?.first?.type ?? "nil")" } ?? ""
+            print("[T1-106340] E applicationState=\(testCase.name) -> stored AppHang event: \(stored != nil ? "YES" : "NO")\(detail)")
+            XCTAssertEqual(stored != nil, testCase.expectStored, testCase.name)
+        }
+        fileManager.deleteAppHangEvent()
     }
 #endif // os(iOS) || os(tvOS)
 
